@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "infinite-context": {
+      "command": "/Users/kayajones/projects/claudecontext/run_mcp.sh",
+      "args": [],
+      "env": {
+        "PYTHONPATH": "/Users/kayajones/projects/claudecontext"
+      }
+    }
+  }
+}

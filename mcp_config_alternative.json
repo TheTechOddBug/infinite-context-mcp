@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "infinite-context": {
+      "command": "/Users/kayajones/projects/claudecontext/venv/bin/python",
+      "args": ["/Users/kayajones/projects/claudecontext/main.py"],
+      "cwd": "/Users/kayajones/projects/claudecontext",
+      "env": {
+        "PYTHONPATH": "/Users/kayajones/projects/claudecontext",
+        "VIRTUAL_ENV": "/Users/kayajones/projects/claudecontext/venv",
+        "PATH": "/Users/kayajones/projects/claudecontext/venv/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+      }
+    }
+  }
+}
+
