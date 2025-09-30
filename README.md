@@ -7,7 +7,6 @@ A sophisticated chat system that uses Claude with infinite context through intel
 - **Infinite Context**: Automatically compresses long conversations while preserving important information
 - **Vector Search**: Uses Pinecone for semantic search across conversation history
 - **Smart Compression**: Uses Claude to intelligently summarize conversations
-- **Founder Data Tracking**: Specialized for tracking founder information and duplicates
 - **High-Quality Embeddings**: Uses OpenAI's text-embedding-3-large model
 
 ## Setup
