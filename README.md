@@ -1,6 +1,6 @@
-# Infinite Context Claude
+# Infinite Context MCP
 
-A sophisticated chat system that uses Claude with infinite context through intelligent conversation compression and vector storage using Pinecone.
+A unified context layer that makes long AI threads usable across tools. It stores key facts and conversation history in Pinecone, auto-compresses before token limits, and lets Claude, Cursor, and ChatGPT retrieve the exact slice you need—decisions, constraints, summaries—without re-explaining threads
 
 ## Features
 
