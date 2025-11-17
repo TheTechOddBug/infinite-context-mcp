@@ -339,9 +339,41 @@ Key parameters you can adjust in the code:
 - **Rate Limits**: The system includes caching to minimize API calls
 - **Query Understanding**: See [QUERY_UNDERSTANDING.md](QUERY_UNDERSTANDING.md) for details on the new QU features
 
+## ChatGPT Integration
+
+Want to use this with ChatGPT? We've created a REST API wrapper!
+
+### Quick Start
+
+1. **Start the API server:**
+   ```bash
+   python api_server.py
+   ```
+
+2. **Use with ChatGPT:**
+   - **Function Calling**: Use `/tools` endpoint for OpenAI function definitions
+   - **Custom GPT**: Create a custom GPT with API actions
+   - **Direct API**: Make HTTP requests to endpoints
+
+See [CHATGPT_INTEGRATION.md](CHATGPT_INTEGRATION.md) for complete setup instructions.
+
+### Example
+
+```python
+import requests
+
+# Use smart_action (recommended)
+response = requests.post(
+    "http://localhost:8000/smart_action",
+    json={"request": "save this conversation about ChatGPT integration"}
+)
+print(response.json()["result"])
+```
+
 ## Additional Documentation
 
-- [SMART_ACTION.md](SMART_ACTION.md) - **NEW**: Intelligent orchestration for frictionless context management
+- [CHATGPT_INTEGRATION.md](CHATGPT_INTEGRATION.md) - **NEW**: Complete guide for ChatGPT integration
+- [SMART_ACTION.md](SMART_ACTION.md) - Intelligent orchestration for frictionless context management
 - [QUERY_UNDERSTANDING.md](QUERY_UNDERSTANDING.md) - Detailed guide to Query Understanding features
 - [USAGE.md](USAGE.md) - How to capture and use context
 - [QUICKSTART.md](QUICKSTART.md) - Quick start guide

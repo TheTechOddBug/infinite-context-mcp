@@ -174,7 +174,19 @@ Respond in JSON format:
         if cache_key in self.query_cache:
             self.cache_hits += 1
             cached = self.query_cache[cache_key]
-            return [QueryRewrite(**r) for r in cached]
+            # Convert cached dicts back to QueryRewrite objects, converting string rewrite_type to enum
+            rewrites = []
+            for r in cached:
+                rewrite_type_str = r.get("rewrite_type", "synonym")
+                # Convert string to RewriteType enum
+                rewrite_type_enum = RewriteType(rewrite_type_str) if isinstance(rewrite_type_str, str) else rewrite_type_str
+                rewrites.append(QueryRewrite(
+                    rewrite=r.get("rewrite", ""),
+                    rewrite_type=rewrite_type_enum,
+                    confidence=float(r.get("confidence", 0.5)),
+                    reasoning=r.get("reasoning", "")
+                ))
+            return rewrites
         
         self.cache_misses += 1
         

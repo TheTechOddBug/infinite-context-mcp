@@ -129,21 +129,22 @@ class InfiniteContextMCP:
                 ),
                 Tool(
                     name="enhanced_search",
-                    description="Enhanced search with query understanding, rewrites, and guardrails",
+                    description="Enhanced search with query understanding, rewrites, guardrails, automatic refinement, and intelligent follow-up recommendations",
                     inputSchema={
                         "type": "object",
                         "properties": {
                             "query": {"type": "string", "description": "What to search for"},
                             "top_k": {"type": "integer", "default": 3},
                             "use_rewrites": {"type": "boolean", "default": True, "description": "Use query rewrites for better recall"},
-                            "min_relevance": {"type": "number", "default": 0.7, "description": "Minimum relevance score threshold"}
+                            "min_relevance": {"type": "number", "default": 0.7, "description": "Minimum relevance score threshold"},
+                            "auto_refine": {"type": "boolean", "default": True, "description": "Automatically refine search with best rewrite if results are poor (default: True)"}
                         },
                         "required": ["query"]
                     }
                 ),
                 Tool(
                     name="smart_action",
-                    description="Intelligent orchestration tool that automatically routes requests and combines tools for frictionless context management. Just describe what you want in natural language.",
+                    description="Intelligent orchestration tool that automatically routes requests and combines tools for frictionless context management. Just describe what you want in natural language. When saving conversations, if conversation_context is provided, it will automatically analyze and extract summary, topics, key findings, and decisions from the conversation.",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -153,7 +154,7 @@ class InfiniteContextMCP:
                             },
                             "conversation_context": {
                                 "type": "string",
-                                "description": "Optional: Current conversation context to help understand the request better"
+                                "description": "Optional: Full conversation context. When saving, this will be automatically analyzed to extract summary, topics, key findings, and decisions. If not provided, the system will infer from the request."
                             }
                         },
                         "required": ["request"]
@@ -320,6 +321,94 @@ class InfiniteContextMCP:
         
         return TextContent(type="text", text=result_text)
     
+    async def _generate_followup_recommendations(
+        self, 
+        original_query: str, 
+        classification, 
+        rewrites: List, 
+        results: List[Dict],
+        all_results: List[Dict]
+    ) -> List[str]:
+        """
+        Generate follow-up query recommendations based on search results and generated rewrites.
+        """
+        recommendations = []
+        
+        # If no results or poor results, recommend trying rewrites
+        if len(results) == 0 or (results and results[0].get('score', 0) < 0.6):
+            if rewrites:
+                recommendations.append(f"💡 Try a different approach: '{rewrites[0].rewrite}' (from generated rewrites)")
+                if len(rewrites) > 1:
+                    recommendations.append(f"💡 Or try: '{rewrites[1].rewrite}'")
+        
+        # Recommend broader/narrower searches based on results
+        if results:
+            # Extract topics from results
+            result_topics = set()
+            for result in results[:3]:
+                meta = result.get('metadata', {})
+                topics_str = meta.get('topics', '')
+                if topics_str:
+                    try:
+                        topics = eval(topics_str) if isinstance(topics_str, str) else topics_str
+                        if isinstance(topics, list):
+                            result_topics.update(topics)
+                    except:
+                        pass
+            
+            if result_topics:
+                topics_list = list(result_topics)[:3]
+                recommendations.append(f"🔍 Explore related topics: '{', '.join(topics_list)}'")
+            
+            # If results are good, suggest narrowing
+            if results[0].get('score', 0) > 0.8:
+                recommendations.append(f"🎯 Narrow your search: Add more specific terms to '{original_query}'")
+        else:
+            # No results - suggest broader search
+            recommendations.append(f"🔍 Try a broader search: Remove specific terms from '{original_query}'")
+            if classification.categories:
+                recommendations.append(f"📂 Search by category: '{classification.categories[0]}'")
+        
+        # Use LLM to generate intelligent recommendations
+        try:
+            results_summary = f"Found {len(results)} results. " + \
+                            (f"Top result relevance: {results[0].get('score', 0):.1%}" if results else "No results found.")
+            
+            prompt = f"""Based on this search scenario, suggest 2-3 follow-up queries that would help the user find what they're looking for.
+
+Original Query: "{original_query}"
+Query Intent: {classification.intent}
+Query Categories: {', '.join(classification.categories[:3]) if classification.categories else 'None'}
+Generated Rewrites: {', '.join([r.rewrite for r in rewrites[:3]]) if rewrites else 'None'}
+Search Results: {results_summary}
+
+Suggest follow-up queries that:
+1. Try alternative phrasings if no results
+2. Narrow down if too many results
+3. Explore related topics found in results
+4. Use different search angles
+
+Respond with JSON array of query strings:
+{{"recommendations": ["query 1", "query 2", "query 3"]}}
+"""
+
+            response = self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a search query expert. Always respond with valid JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.4,
+                response_format={"type": "json_object"}
+            )
+            
+            llm_recs = json.loads(response.choices[0].message.content)
+            recommendations.extend(llm_recs.get("recommendations", [])[:3])
+        except Exception as e:
+            pass  # Fallback to basic recommendations
+        
+        return recommendations[:5]  # Limit to 5 recommendations
+    
     async def enhanced_search(self, args: dict) -> TextContent:
         """
         Enhanced search with query understanding, rewrites, and guardrails.
@@ -329,6 +418,7 @@ class InfiniteContextMCP:
         top_k = args.get('top_k', 3)
         use_rewrites = args.get('use_rewrites', True)
         min_relevance = args.get('min_relevance', 0.7)
+        auto_refine = args.get('auto_refine', True)  # Default: automatically refine if poor results
         
         result_text = f"🚀 Enhanced Search for: '{query}'\n\n"
         
@@ -341,10 +431,11 @@ class InfiniteContextMCP:
         
         # Step 2: Generate rewrites if enabled
         search_queries = [query]
+        rewrites = []
         if use_rewrites:
             rewrites = self.query_engine.generate_rewrites(
                 query, 
-                [RewriteType.SYNONYM, RewriteType.EXPANSION]
+                [RewriteType.SYNONYM, RewriteType.EXPANSION, RewriteType.BROADER]
             )
             # Add top rewrites to search queries
             top_rewrites = sorted(rewrites, key=lambda x: x.confidence, reverse=True)[:2]
@@ -353,7 +444,9 @@ class InfiniteContextMCP:
             
             result_text += f"✏️ Query Rewrites Generated: {len(rewrites)}\n"
             for i, rewrite in enumerate(top_rewrites, 1):
-                result_text += f"   {i}. {rewrite.rewrite} ({rewrite.rewrite_type.value})\n"
+                # Handle both enum and string rewrite_type
+                rewrite_type_str = rewrite.rewrite_type.value if hasattr(rewrite.rewrite_type, 'value') else str(rewrite.rewrite_type)
+                result_text += f"   {i}. {rewrite.rewrite} ({rewrite_type_str})\n"
             result_text += "\n"
         
         # Step 3: Search with all queries and aggregate results
@@ -416,9 +509,37 @@ class InfiniteContextMCP:
                     result_text += f"   🔍 Key Findings: {meta.get('findings', 'N/A')}\n"
                 result_text += "\n"
         
+        # Step 6: Auto-refine if poor results and enabled
+        if auto_refine and (not final_results or (final_results and final_results[0].get('score', 0) < 0.6)):
+            if rewrites:
+                result_text += f"🔄 Auto-refining search with best rewrite...\n\n"
+                # Try the best rewrite
+                best_rewrite = sorted(rewrites, key=lambda x: x.confidence, reverse=True)[0]
+                refined_result = await self.enhanced_search({
+                    "query": best_rewrite.rewrite,
+                    "top_k": top_k,
+                    "use_rewrites": False,  # Don't rewrite again
+                    "min_relevance": min_relevance,
+                    "auto_refine": False  # Prevent infinite loop
+                })
+                result_text += f"✨ Refined Search Results:\n{refined_result.text}\n"
+        
+        # Step 7: Generate follow-up recommendations
+        recommendations = await self._generate_followup_recommendations(
+            query, classification, rewrites, final_results, all_results
+        )
+        
+        if recommendations:
+            result_text += "\n" + "=" * 60 + "\n"
+            result_text += "💡 Follow-up Query Recommendations:\n\n"
+            for i, rec in enumerate(recommendations, 1):
+                result_text += f"   {i}. {rec}\n"
+            result_text += "\n"
+            result_text += "💬 Tip: Use these queries with enhanced_search for better results!\n"
+        
         # Add cache stats
         cache_stats = self.query_engine.get_cache_stats()
-        result_text += f"💾 Cache Stats: {cache_stats['hit_rate']} hit rate\n"
+        result_text += f"\n💾 Cache Stats: {cache_stats['hit_rate']} hit rate\n"
         
         return TextContent(type="text", text=result_text)
     
@@ -469,6 +590,85 @@ class InfiniteContextMCP:
                  f"   Hit rate: {cache_stats['hit_rate']}"
         )
     
+    async def _analyze_conversation(self, conversation: str, user_request: str = "") -> dict:
+        """
+        Analyze conversation context to extract summary, topics, key findings, and decisions.
+        Uses LLM to intelligently extract information from the conversation.
+        """
+        if not conversation or len(conversation.strip()) < 50:
+            return {
+                "summary": user_request[:200] if user_request else "Conversation context",
+                "topics": [],
+                "key_findings": [],
+                "data": {}
+            }
+        
+        analysis_prompt = f"""Analyze the following conversation and extract key information for context storage.
+
+Conversation:
+{conversation[:8000]}  # Limit to avoid token limits
+
+User's save request: "{user_request}"
+
+Extract and provide:
+1. A concise summary (2-3 sentences) of what was discussed
+2. Main topics/themes (3-7 topics as a list)
+3. Key findings, decisions, or important points (3-10 bullet points)
+4. Any structured data, facts, or metrics mentioned (as JSON object)
+
+Respond in JSON format:
+{{
+    "summary": "Brief summary of the conversation",
+    "topics": ["topic1", "topic2", "topic3"],
+    "key_findings": [
+        "Finding 1",
+        "Finding 2",
+        "Finding 3"
+    ],
+    "data": {{
+        "key": "value",
+        "metric": 123
+    }}
+}}
+
+Focus on:
+- What was actually discussed/accomplished
+- Important decisions made
+- Key insights or discoveries
+- Technical details, configurations, or facts
+- Problems solved or solutions found
+"""
+
+        try:
+            response = self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are an expert at analyzing conversations and extracting key information. Always respond with valid JSON."},
+                    {"role": "user", "content": analysis_prompt}
+                ],
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            
+            analysis = json.loads(response.choices[0].message.content)
+            
+            # Ensure all fields exist
+            return {
+                "summary": analysis.get("summary", user_request[:200] if user_request else "Conversation context"),
+                "topics": analysis.get("topics", [])[:10],  # Limit topics
+                "key_findings": analysis.get("key_findings", [])[:15],  # Limit findings
+                "data": analysis.get("data", {})
+            }
+        except Exception as e:
+            # Fallback to basic extraction
+            classification = self.query_engine.classify_query(conversation[:500] if conversation else user_request)
+            return {
+                "summary": conversation[:300] if conversation else user_request[:200],
+                "topics": classification.categories[:5] if classification.categories else [],
+                "key_findings": [],
+                "data": {}
+            }
+    
     async def smart_action(self, args: dict) -> TextContent:
         """
         Intelligent orchestration tool that automatically routes requests
@@ -491,7 +691,7 @@ Available tools:
 7. auto_compress - Compress conversation (needs: conversation, focus)
 
 User Request: "{request}"
-Conversation Context: "{conversation_context[:500] if conversation_context else 'None'}"
+Conversation Context: "{conversation_context[:1000] if conversation_context else 'None'}"
 
 Determine:
 1. Primary action (save_context, search_context, enhanced_search, get_memory_stats, classify_query, rewrite_query, auto_compress, or multi_action)
@@ -538,18 +738,38 @@ Examples:
             
             # Execute primary action
             if action == "save_context":
-                # Extract or infer parameters from request
-                if not parameters.get("summary"):
-                    # Try to infer from request
-                    parameters["summary"] = request[:200]
-                if not parameters.get("topics"):
-                    # Classify to get topics
-                    classification = self.query_engine.classify_query(request)
-                    parameters["topics"] = classification.categories[:5] if classification.categories else []
-                if not parameters.get("key_findings"):
-                    parameters["key_findings"] = []
-                if not parameters.get("data"):
-                    parameters["data"] = {}
+                # If conversation_context is provided, analyze it to extract information
+                if conversation_context and len(conversation_context.strip()) > 50:
+                    result_text += "🧠 Analyzing conversation context...\n\n"
+                    analysis = await self._analyze_conversation(conversation_context, request)
+                    
+                    # Use analyzed data, but allow user-provided parameters to override
+                    if not parameters.get("summary"):
+                        parameters["summary"] = analysis["summary"]
+                    if not parameters.get("topics") or len(parameters.get("topics", [])) == 0:
+                        parameters["topics"] = analysis["topics"]
+                    if not parameters.get("key_findings") or len(parameters.get("key_findings", [])) == 0:
+                        parameters["key_findings"] = analysis["key_findings"]
+                    if not parameters.get("data") or len(parameters.get("data", {})) == 0:
+                        parameters["data"] = analysis["data"]
+                    
+                    result_text += f"✅ Extracted:\n"
+                    result_text += f"   📝 Summary: {analysis['summary'][:100]}...\n"
+                    result_text += f"   🏷️  Topics: {', '.join(analysis['topics'][:5])}\n"
+                    result_text += f"   🔍 Key Findings: {len(analysis['key_findings'])} items\n"
+                    result_text += "\n"
+                else:
+                    # Fallback: Extract or infer parameters from request
+                    if not parameters.get("summary"):
+                        parameters["summary"] = request[:200] if request else "Conversation context"
+                    if not parameters.get("topics"):
+                        # Classify to get topics
+                        classification = self.query_engine.classify_query(request)
+                        parameters["topics"] = classification.categories[:5] if classification.categories else []
+                    if not parameters.get("key_findings"):
+                        parameters["key_findings"] = []
+                    if not parameters.get("data"):
+                        parameters["data"] = {}
                 
                 result = await self.save_context(parameters)
                 result_text += result.text
@@ -572,6 +792,8 @@ Examples:
                     parameters["use_rewrites"] = True
                 if "min_relevance" not in parameters:
                     parameters["min_relevance"] = 0.7
+                if "auto_refine" not in parameters:
+                    parameters["auto_refine"] = True  # Default to True, automatically refine
                 
                 result = await self.enhanced_search(parameters)
                 result_text += result.text
