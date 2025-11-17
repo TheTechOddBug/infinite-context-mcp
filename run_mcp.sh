@@ -4,3 +4,8 @@ cd /Users/kayajones/projects/claudecontext
 source venv/bin/activate
 exec python main.py
 
+
+
+
+
+
