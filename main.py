@@ -65,7 +65,8 @@ class InfiniteContextMCP:
                             "summary": {"type": "string", "description": "Summary of the conversation"},
                             "topics": {"type": "array", "items": {"type": "string"}},
                             "data": {"type": "object", "description": "Structured data to save"},
-                            "key_findings": {"type": "array", "items": {"type": "string"}}
+                            "key_findings": {"type": "array", "items": {"type": "string"}},
+                            "content": {"type": "string", "description": "Full content to save (optional)"}
                         },
                         "required": ["summary"]
                     }
@@ -193,16 +194,25 @@ class InfiniteContextMCP:
     
     async def save_context(self, args: dict) -> TextContent:
         """Save context to Pinecone"""
+        # Ensure topics and key_findings are always lists (handle None values)
+        topics = args.get('topics') or []
+        key_findings = args.get('key_findings') or []
+        data = args.get('data') or {}
+        content = args.get('content') or ''
+        
         # Generate embedding
+        # Note: text-embedding-3-large has a token limit. We include content but truncate it for embedding generation
+        # to avoid API errors, while storing a larger chunk in metadata.
         text = f"""
         Summary: {args.get('summary', '')}
-        Topics: {', '.join(args.get('topics', []))}
-        Findings: {', '.join(args.get('key_findings', []))}
-        Data: {json.dumps(args.get('data', {}))}
+        Topics: {', '.join(topics)}
+        Findings: {', '.join(key_findings)}
+        Data: {json.dumps(data)}
+        Content: {content[:20000]}
         """
         
         response = self.openai.embeddings.create(
-            input=text,
+            input=text[:30000], # Hard truncate to be safe for embedding model
             model="text-embedding-3-large",
             dimensions=1024
         )
@@ -212,6 +222,12 @@ class InfiniteContextMCP:
         # Store in Pinecone
         chunk_id = f"{self.current_session}_chunk_{self.chunk_count}"
         
+        # Pinecone metadata limit is 40KB per vector. We allocate:
+        # - Content: ~25KB
+        # - Summary: ~2KB
+        # - Data: ~2KB
+        # - Others: ~1KB
+        
         self.index.upsert([{
             "id": chunk_id,
             "values": embedding,
@@ -219,10 +235,11 @@ class InfiniteContextMCP:
                 "session_id": self.current_session,
                 "chunk_id": self.chunk_count,
                 "timestamp": datetime.now().isoformat(),
-                "summary": args.get('summary', '')[:1000],
-                "topics": str(args.get('topics', [])),
-                "findings": str(args.get('key_findings', [])),
-                "data": json.dumps(args.get('data', {}))[:1000]
+                "summary": args.get('summary', '')[:2000],
+                "topics": str(topics),
+                "findings": str(key_findings),
+                "data": json.dumps(data)[:2000],
+                "content": content[:25000]
             }
         }])
         
@@ -232,8 +249,8 @@ class InfiniteContextMCP:
             type="text",
             text=f"✅ Saved context chunk {chunk_id}\n"
                  f"Session: {self.current_session}\n"
-                 f"Topics: {', '.join(args.get('topics', []))}\n"
-                 f"Findings: {len(args.get('key_findings', []))} key findings stored"
+                 f"Topics: {', '.join(topics) if topics else 'None'}\n"
+                 f"Findings: {len(key_findings)} key findings stored"
         )
     
     async def search_context(self, args: dict) -> TextContent:
@@ -265,6 +282,13 @@ class InfiniteContextMCP:
             context_text += f"   🆔 Chunk ID: {meta.get('chunk_id', 'N/A')}\n"
             context_text += f"   📅 Time: {meta.get('timestamp', 'N/A')}\n"
             context_text += f"   📝 Summary: {meta.get('summary', 'N/A')}\n"
+            
+            # Show content snippet or full content if short
+            content = meta.get('content', '')
+            if content:
+                preview = content[:500] + "..." if len(content) > 500 else content
+                context_text += f"   📜 Content Preview: {preview}\n"
+                
             context_text += f"   🏷️  Topics: {meta.get('topics', 'N/A')}\n"
             if meta.get('findings'):
                 context_text += f"   🔍 Key Findings: {meta.get('findings', 'N/A')}\n"
@@ -753,6 +777,10 @@ Examples:
                     if not parameters.get("data") or len(parameters.get("data", {})) == 0:
                         parameters["data"] = analysis["data"]
                     
+                    # Ensure full content is saved
+                    if not parameters.get("content"):
+                        parameters["content"] = conversation_context
+                    
                     result_text += f"✅ Extracted:\n"
                     result_text += f"   📝 Summary: {analysis['summary'][:100]}...\n"
                     result_text += f"   🏷️  Topics: {', '.join(analysis['topics'][:5])}\n"
@@ -770,6 +798,8 @@ Examples:
                         parameters["key_findings"] = []
                     if not parameters.get("data"):
                         parameters["data"] = {}
+                    if not parameters.get("content"):
+                        parameters["content"] = request # Use request as content if no conversation
                 
                 result = await self.save_context(parameters)
                 result_text += result.text

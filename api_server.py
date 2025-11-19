@@ -264,9 +264,11 @@ async def get_tools():
     }
 
 if __name__ == "__main__":
+    import os
+    port = int(os.getenv("PORT", 8000))
     print("🚀 Starting Infinite Context API Server...")
-    print("📡 API will be available at http://localhost:8000")
-    print("📚 API docs at http://localhost:8000/docs")
-    print("🔧 Tools endpoint at http://localhost:8000/tools")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print(f"📡 API will be available at http://0.0.0.0:{port}")
+    print(f"📚 API docs at http://0.0.0.0:{port}/docs")
+    print(f"🔧 Tools endpoint at http://0.0.0.0:{port}/tools")
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
