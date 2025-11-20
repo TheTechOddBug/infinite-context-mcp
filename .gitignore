@@ -85,3 +85,10 @@ dmypy.json
 
 # History files (VS Code Local History extension)
 .history/
+
+# Workspace files (user-specific IDE configs)
+*.code-workspace
+
+# Config files that might contain secrets (keep example files)
+mcp_config.json
+!mcp_config_alternative.json

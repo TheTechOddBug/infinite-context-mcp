@@ -144,6 +144,30 @@ class InfiniteContextMCP:
                     }
                 ),
                 Tool(
+                    name="ask_question",
+                    description="RAG Question Answering - Ask questions about your saved data. Searches relevant contexts and generates comprehensive answers based on your saved information.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": "The question you want to ask about your saved data (e.g., 'what am I building?', 'what projects have I worked on?', 'what did I learn about Pinecone?')"
+                            },
+                            "top_k": {
+                                "type": "integer",
+                                "default": 10,
+                                "description": "Number of relevant contexts to retrieve for answering"
+                            },
+                            "min_relevance": {
+                                "type": "number",
+                                "default": 0.3,
+                                "description": "Minimum relevance threshold for including contexts"
+                            }
+                        },
+                        "required": ["question"]
+                    }
+                ),
+                Tool(
                     name="smart_action",
                     description="Intelligent orchestration tool that automatically routes requests and combines tools for frictionless context management. Just describe what you want in natural language. When saving conversations, if conversation_context is provided, it will automatically analyze and extract summary, topics, key findings, and decisions from the conversation.",
                     inputSchema={
@@ -185,6 +209,9 @@ class InfiniteContextMCP:
                 return [result]
             elif name == "enhanced_search":
                 result = await self.enhanced_search(arguments)
+                return [result]
+            elif name == "ask_question":
+                result = await self.ask_question(arguments)
                 return [result]
             elif name == "smart_action":
                 result = await self.smart_action(arguments)
@@ -254,9 +281,254 @@ class InfiniteContextMCP:
         )
     
     async def search_context(self, args: dict) -> TextContent:
-        """Search Pinecone for relevant context"""
+        """
+        Smart RAG Search - Uses QueryUnderstandingEngine to understand user intent
+        and always generates AI answers based on retrieved contexts.
+        This is the main search method that combines query understanding with RAG.
+        """
         query = args.get('query', '')
-        top_k = args.get('top_k', 3)
+        top_k = args.get('top_k', 5)  # Reduced for speed
+        min_relevance = args.get('min_relevance', 0.3)
+        generate_ai = args.get('generate_ai_response', True)  # Can disable for faster results
+        
+        if not query:
+            return TextContent(
+                type="text",
+                text="❌ Please provide a search query."
+            )
+        
+        # Step 1: Fast query classification (cached, non-blocking)
+        classification = self.query_engine.classify_query(query)
+        query_type_str = classification.query_type.value if hasattr(classification.query_type, 'value') else str(classification.query_type)
+        
+        # Step 2: Generate single embedding for main query (fast)
+        response = self.openai.embeddings.create(
+            input=query,
+            model="text-embedding-3-large",
+            dimensions=1024
+        )
+        embedding = response.data[0].embedding
+        
+        # Step 3: Search Pinecone (fast - single search)
+        results = self.index.query(
+            vector=embedding,
+            top_k=top_k * 2,  # Get more results for better context
+            include_metadata=True
+        )
+        
+        all_results = results['matches']
+        
+        # Step 4: Apply Hybrid Scoring (Semantic + Keyword) - Fast
+        query_keywords = set(query.lower().split())
+        for result in all_results:
+            meta = result.get('metadata', {})
+            content_text = ' '.join([
+                str(meta.get('summary', '')),
+                str(meta.get('content', '')),
+                str(meta.get('topics', '')),
+            ]).lower()
+            
+            keyword_matches = sum(1 for keyword in query_keywords if keyword in content_text)
+            keyword_score = keyword_matches / max(len(query_keywords), 1)
+            exact_phrase_bonus = 0.2 if query.lower() in content_text else 0
+            
+            original_score = result.get('score', 0)
+            result['hybrid_score'] = (
+                0.7 * original_score + 
+                0.2 * keyword_score + 
+                exact_phrase_bonus
+            )
+            result['keyword_matches'] = keyword_matches
+        
+        # Sort by hybrid score
+        all_results.sort(key=lambda x: x.get('hybrid_score', 0), reverse=True)
+        
+        # Step 5: Simple filtering (skip expensive guardrails for speed)
+        if query_type_str == 'question':
+            effective_min_relevance = min(min_relevance, 0.2)
+        else:
+            effective_min_relevance = min_relevance
+        
+        # Simple threshold filter (fast)
+        final_results = [r for r in all_results if r.get('hybrid_score', r.get('score', 0)) >= effective_min_relevance][:top_k]
+        
+        # If no results, take top ones anyway
+        if not final_results and all_results:
+            final_results = all_results[:top_k]
+        
+        # Step 6: Generate AI Answer (RAG-style) - Optional for speed
+        if final_results:
+            if generate_ai:
+                ai_answer = await self.generate_ai_response(query, final_results)
+                result_text = f"🤖 **Answer:**\n\n{ai_answer}\n\n"
+                result_text += "---\n\n"
+            else:
+                result_text = ""
+            
+            result_text += f"📚 **Sources ({len(final_results)}):**\n\n"
+            
+            for i, match in enumerate(final_results[:5], 1):
+                meta = match['metadata']
+                summary = meta.get('summary', 'Untitled')[:100]
+                timestamp = meta.get('timestamp', 'N/A')[:10] if meta.get('timestamp') else 'N/A'
+                score = match.get('hybrid_score', match.get('score', 0))
+                result_text += f"**[{i}]** {summary}...\n"
+                result_text += f"   📊 {score:.2%} | 📅 {timestamp}\n\n"
+            
+            if len(final_results) > 5:
+                result_text += f"... and {len(final_results) - 5} more\n"
+        else:
+            result_text = f"❌ **No relevant contexts found**\n\n"
+            result_text += f"💡 Try rephrasing your question or using more general terms.\n"
+        
+        return TextContent(type="text", text=result_text)
+    
+    async def generate_ai_response(self, query: str, search_results: list) -> str:
+        """Generate a fast AI response based on search results"""
+        if not search_results:
+            return "I couldn't find any relevant information in your saved contexts."
+        
+        # Build concise context from top 2 results for speed
+        context_pieces = []
+        for i, match in enumerate(search_results[:2], 1):  # Use top 2 for speed
+            meta = match.get('metadata', {})
+            # Prefer summary, fallback to content snippet (shorter)
+            content = meta.get('summary', '') or meta.get('content', '')[:300]  # Even shorter
+            if content:
+                context_pieces.append(f"[{i}] {content}")
+        
+        # Ultra-concise prompt for fastest generation
+        user_prompt = f"""Q: {query}\n\n{chr(10).join(context_pieces)}\n\nAnswer briefly. Cite [1], [2]."""
+        
+        try:
+            # Optimized for speed: single message, minimal tokens, low temperature
+            completion = self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "user", "content": user_prompt}  # Single message for speed
+                ],
+                temperature=0.2,  # Very low for fastest responses
+                max_tokens=400  # Reduced further for speed
+            )
+            
+            return completion.choices[0].message.content
+        except Exception as e:
+            return f"Error: {str(e)}"
+    
+    async def ask_question(self, args: dict) -> TextContent:
+        """
+        RAG Question Answering - Ask questions about your saved data.
+        Searches relevant contexts and generates comprehensive answers.
+        """
+        question = args.get('question', '')
+        top_k = args.get('top_k', 10)  # Get more contexts for better answers
+        min_relevance = args.get('min_relevance', 0.3)  # Lower threshold for broader context
+        
+        if not question:
+            return TextContent(
+                type="text",
+                text="❌ Please provide a question to answer."
+            )
+        
+        # Step 1: Search for relevant contexts using enhanced search
+        search_args = {
+            'query': question,
+            'top_k': top_k,
+            'use_rewrites': True,
+            'min_relevance': min_relevance,
+            'generate_ai_response': False,  # We'll generate our own
+            'auto_refine': True
+        }
+        
+        # Get search results
+        search_result = await self.enhanced_search(search_args)
+        
+        # Extract results from the search response
+        # Parse the search result text to get the actual matches
+        search_text = search_result.text
+        
+        # Use the search method directly to get structured results
+        response = self.openai.embeddings.create(
+            input=question,
+            model="text-embedding-3-large",
+            dimensions=1024
+        )
+        embedding = response.data[0].embedding
+        
+        # Search Pinecone
+        results = self.index.query(
+            vector=embedding,
+            top_k=top_k,
+            include_metadata=True
+        )
+        
+        # Apply hybrid scoring
+        query_keywords = set(question.lower().split())
+        all_results = []
+        for match in results['matches']:
+            meta = match.get('metadata', {})
+            content_text = ' '.join([
+                str(meta.get('summary', '')),
+                str(meta.get('content', '')),
+                str(meta.get('topics', '')),
+            ]).lower()
+            
+            keyword_matches = sum(1 for keyword in query_keywords if keyword in content_text)
+            keyword_score = keyword_matches / max(len(query_keywords), 1)
+            exact_phrase_bonus = 0.2 if question.lower() in content_text else 0
+            
+            match['hybrid_score'] = (
+                0.7 * match.get('score', 0) + 
+                0.2 * keyword_score + 
+                exact_phrase_bonus
+            )
+            match['keyword_matches'] = keyword_matches
+            all_results.append(match)
+        
+        # Sort by hybrid score and filter
+        all_results.sort(key=lambda x: x.get('hybrid_score', 0), reverse=True)
+        filtered_results = [r for r in all_results if r.get('hybrid_score', 0) >= min_relevance]
+        
+        # Step 2: Generate comprehensive AI answer
+        if not filtered_results:
+            return TextContent(
+                type="text",
+                text=f"❓ **Question:** {question}\n\n"
+                     f"❌ I couldn't find any relevant information in your saved contexts to answer this question.\n\n"
+                     f"💡 **Suggestions:**\n"
+                     f"- Try rephrasing your question\n"
+                     f"- Use more general terms\n"
+                     f"- Make sure you have saved relevant context first"
+            )
+        
+        ai_answer = await self.generate_ai_response(question, filtered_results[:5])
+        
+        # Step 3: Format the response
+        response_text = f"❓ **Question:** {question}\n\n"
+        response_text += f"🤖 **Answer:**\n\n{ai_answer}\n\n"
+        response_text += "---\n\n"
+        response_text += f"📚 **Sources ({len(filtered_results)} contexts used):**\n\n"
+        
+        for i, match in enumerate(filtered_results[:5], 1):
+            meta = match['metadata']
+            summary = meta.get('summary', 'Untitled')[:80]
+            timestamp = meta.get('timestamp', 'N/A')[:10] if meta.get('timestamp') else 'N/A'
+            score = match.get('hybrid_score', match.get('score', 0))
+            response_text += f"[{i}] {summary}... (relevance: {score:.2%})\n"
+            if meta.get('topics'):
+                topics = str(meta.get('topics', ''))[:50]
+                response_text += f"    Topics: {topics}\n"
+            response_text += f"    Date: {timestamp}\n\n"
+        
+        if len(filtered_results) > 5:
+            response_text += f"... and {len(filtered_results) - 5} more contexts\n"
+        
+        return TextContent(type="text", text=response_text)
+    
+    async def search_with_ai_response(self, args: dict) -> TextContent:
+        """Search context and generate an AI response like Perplexity"""
+        query = args.get('query', '')
+        top_k = args.get('top_k', 5)
         
         # Generate query embedding
         response = self.openai.embeddings.create(
@@ -274,29 +546,18 @@ class InfiniteContextMCP:
             include_metadata=True
         )
         
-        context_text = f"🔍 Found {len(results['matches'])} relevant contexts for: '{query}'\n\n"
+        # Generate AI response
+        ai_response = await self.generate_ai_response(query, results['matches'])
+        
+        # Format the complete response
+        response_text = f"🤖 **AI Response**\n\n{ai_response}\n\n"
+        response_text += "---\n\n📚 **Sources:**\n\n"
         
         for i, match in enumerate(results['matches'], 1):
             meta = match['metadata']
-            context_text += f"📄 Result {i} (relevance: {match['score']:.2%})\n"
-            context_text += f"   🆔 Chunk ID: {meta.get('chunk_id', 'N/A')}\n"
-            context_text += f"   📅 Time: {meta.get('timestamp', 'N/A')}\n"
-            context_text += f"   📝 Summary: {meta.get('summary', 'N/A')}\n"
-            
-            # Show content snippet or full content if short
-            content = meta.get('content', '')
-            if content:
-                preview = content[:500] + "..." if len(content) > 500 else content
-                context_text += f"   📜 Content Preview: {preview}\n"
-                
-            context_text += f"   🏷️  Topics: {meta.get('topics', 'N/A')}\n"
-            if meta.get('findings'):
-                context_text += f"   🔍 Key Findings: {meta.get('findings', 'N/A')}\n"
-            if meta.get('data'):
-                context_text += f"   📊 Data: {meta.get('data', 'N/A')}\n"
-            context_text += "\n"
+            response_text += f"[{i}] {meta.get('summary', 'Untitled context')[:100]}... (relevance: {match['score']:.2%})\n"
         
-        return TextContent(type="text", text=context_text)
+        return TextContent(type="text", text=response_text)
     
     async def classify_query(self, args: dict) -> TextContent:
         """Classify a query to understand intent and categories"""
@@ -306,7 +567,8 @@ class InfiniteContextMCP:
         classification = self.query_engine.classify_query(query, context)
         
         result_text = f"🎯 Query Classification for: '{query}'\n\n"
-        result_text += f"Query Type: {classification.query_type.value}\n"
+        query_type_str = classification.query_type.value if hasattr(classification.query_type, 'value') else str(classification.query_type)
+        result_text += f"Query Type: {query_type_str}\n"
         result_text += f"Confidence: {classification.confidence:.1%}\n"
         result_text += f"Intent: {classification.intent}\n"
         result_text += f"Categories: {', '.join(classification.categories) if classification.categories else 'None'}\n"
@@ -433,6 +695,43 @@ Respond with JSON array of query strings:
         
         return recommendations[:5]  # Limit to 5 recommendations
     
+    def _generate_typo_tolerant_queries(self, query: str) -> list:
+        """Generate typo-tolerant variations of the query"""
+        variations = []
+        
+        # Common typo patterns
+        typo_map = {
+            'pinecone': ['pincone', 'pinecode', 'pine cone'],
+            'raycast': ['raycat', 'ray cast', 'raycost'],
+            'search': ['serach', 'seach', 'searchh'],
+            'context': ['contex', 'conext', 'contextt'],
+            'query': ['querry', 'qeury', 'queery'],
+            'understanding': ['understnading', 'understaning', 'undestanding'],
+            'mcp': ['mpc', 'mc p', 'mcpp'],
+            'api': ['ap i', 'apii', 'aip'],
+            'server': ['sever', 'servr', 'servre'],
+            'config': ['confg', 'conifg', 'configuration']
+        }
+        
+        # Check if query contains common typos
+        query_lower = query.lower()
+        for correct, typos in typo_map.items():
+            for typo in typos:
+                if typo in query_lower:
+                    # Generate corrected version
+                    corrected = query_lower.replace(typo, correct)
+                    variations.append(corrected)
+        
+        # Also check reverse - if query has correct word, add common typos
+        # This helps find content where the typo was in the saved context
+        for correct, typos in typo_map.items():
+            if correct in query_lower:
+                for typo in typos[:1]:  # Just one typo variant
+                    typo_version = query_lower.replace(correct, typo)
+                    variations.append(typo_version)
+        
+        return variations[:3]  # Limit variations
+    
     async def enhanced_search(self, args: dict) -> TextContent:
         """
         Enhanced search with query understanding, rewrites, and guardrails.
@@ -449,28 +748,43 @@ Respond with JSON array of query strings:
         # Step 1: Classify the query
         classification = self.query_engine.classify_query(query)
         result_text += f"📊 Query Classification:\n"
-        result_text += f"   Type: {classification.query_type.value}\n"
+        query_type_str = classification.query_type.value if hasattr(classification.query_type, 'value') else str(classification.query_type)
+        result_text += f"   Type: {query_type_str}\n"
         result_text += f"   Intent: {classification.intent}\n"
         result_text += f"   Categories: {', '.join(classification.categories) if classification.categories else 'None'}\n\n"
         
-        # Step 2: Generate rewrites if enabled
+        # Step 2: Query Expansion - Generate multiple search strategies
         search_queries = [query]
         rewrites = []
+        
+        # Extract key entities and concepts from the query
+        # This helps with typo tolerance and concept matching
+        query_tokens = query.lower().split()
+        
         if use_rewrites:
+            # Generate semantic rewrites
             rewrites = self.query_engine.generate_rewrites(
                 query, 
-                [RewriteType.SYNONYM, RewriteType.EXPANSION, RewriteType.BROADER]
+                [RewriteType.SYNONYM, RewriteType.EXPANSION, RewriteType.BROADER, RewriteType.SUBSTITUTE]
             )
-            # Add top rewrites to search queries
-            top_rewrites = sorted(rewrites, key=lambda x: x.confidence, reverse=True)[:2]
+            
+            # Add spelling corrections and common variations
+            # This helps when users mistype or use different terminology
+            if len(query_tokens) <= 5:  # Only for shorter queries
+                # Add common typo corrections
+                typo_variations = self._generate_typo_tolerant_queries(query)
+                search_queries.extend(typo_variations[:2])
+            
+            # Add top semantic rewrites
+            top_rewrites = sorted(rewrites, key=lambda x: x.confidence, reverse=True)[:3]
             for rewrite in top_rewrites:
                 search_queries.append(rewrite.rewrite)
             
-            result_text += f"✏️ Query Rewrites Generated: {len(rewrites)}\n"
-            for i, rewrite in enumerate(top_rewrites, 1):
-                # Handle both enum and string rewrite_type
-                rewrite_type_str = rewrite.rewrite_type.value if hasattr(rewrite.rewrite_type, 'value') else str(rewrite.rewrite_type)
-                result_text += f"   {i}. {rewrite.rewrite} ({rewrite_type_str})\n"
+            result_text += f"✏️ Query Expansion: {len(search_queries)} search variants\n"
+            for i, sq in enumerate(search_queries[:4], 1):  # Show first 4
+                result_text += f"   {i}. {sq}\n"
+            if len(search_queries) > 4:
+                result_text += f"   ... and {len(search_queries) - 4} more\n"
             result_text += "\n"
         
         # Step 3: Search with all queries and aggregate results
@@ -493,20 +807,59 @@ Respond with JSON array of query strings:
                 include_metadata=True
             )
             
-            # Add unique results
+            # Add unique results with query-specific scoring
             for match in results['matches']:
                 chunk_id = match['metadata'].get('chunk_id')
                 if chunk_id not in seen_ids:
+                    # Add query source for hybrid scoring
+                    match['query_source'] = search_query
                     all_results.append(match)
                     seen_ids.add(chunk_id)
         
-        # Step 4: Apply guardrails
+        # Step 3.5: Apply Hybrid Scoring (Semantic + Keyword)
+        # This improves relevance by combining vector similarity with keyword matching
+        query_keywords = set(query.lower().split())
+        for result in all_results:
+            meta = result.get('metadata', {})
+            
+            # Calculate keyword match score
+            content_text = ' '.join([
+                str(meta.get('summary', '')),
+                str(meta.get('content', '')),
+                str(meta.get('topics', '')),
+                str(meta.get('findings', ''))
+            ]).lower()
+            
+            # Count keyword matches
+            keyword_matches = sum(1 for keyword in query_keywords if keyword in content_text)
+            keyword_score = keyword_matches / max(len(query_keywords), 1)
+            
+            # Check for exact phrase match (bonus score)
+            exact_phrase_bonus = 0.2 if query.lower() in content_text else 0
+            
+            # Combine scores (70% semantic, 20% keyword, 10% exact phrase)
+            original_score = result.get('score', 0)
+            result['hybrid_score'] = (
+                0.7 * original_score + 
+                0.2 * keyword_score + 
+                exact_phrase_bonus
+            )
+            result['keyword_matches'] = keyword_matches
+        
+        # Sort by hybrid score
+        all_results.sort(key=lambda x: x.get('hybrid_score', 0), reverse=True)
+        
+        # Step 4: Apply guardrails using hybrid scores
+        # Update scores for guardrail evaluation
+        for result in all_results:
+            result['score'] = result.get('hybrid_score', result.get('score', 0))
+        
         filtered_results, filter_reasons = self.query_engine.apply_guardrails(
             query, all_results, min_relevance
         )
         
-        # Sort by score and take top_k
-        filtered_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+        # Sort by hybrid score and take top_k
+        filtered_results.sort(key=lambda x: x.get('hybrid_score', 0), reverse=True)
         final_results = filtered_results[:top_k]
         
         result_text += f"🛡️ Guardrails Applied:\n"
@@ -516,21 +869,28 @@ Respond with JSON array of query strings:
             result_text += f"   Filtered out: {len(filter_reasons)} results\n"
         result_text += "\n"
         
-        # Step 5: Display results
-        result_text += f"📄 Search Results ({len(final_results)}):\n\n"
+        # Step 5: Generate AI Response (Perplexity-style)
+        if final_results and args.get('generate_ai_response', True):
+            result_text += f"🤖 **AI Response:**\n\n"
+            ai_response = await self.generate_ai_response(query, final_results)
+            result_text += f"{ai_response}\n\n"
+            result_text += "---\n\n"
+        
+        # Step 6: Display results
+        result_text += f"📄 **Search Results ({len(final_results)}):**\n\n"
         
         if not final_results:
             result_text += "No results found matching the relevance threshold.\n"
         else:
             for i, match in enumerate(final_results, 1):
                 meta = match['metadata']
-                result_text += f"📄 Result {i} (relevance: {match['score']:.2%})\n"
-                result_text += f"   🆔 Chunk ID: {meta.get('chunk_id', 'N/A')}\n"
-                result_text += f"   📅 Time: {meta.get('timestamp', 'N/A')}\n"
-                result_text += f"   📝 Summary: {meta.get('summary', 'N/A')}\n"
-                result_text += f"   🏷️  Topics: {meta.get('topics', 'N/A')}\n"
-                if meta.get('findings'):
-                    result_text += f"   🔍 Key Findings: {meta.get('findings', 'N/A')}\n"
+                result_text += f"**[{i}]** {meta.get('summary', 'Untitled')[:100]}...\n"
+                result_text += f"   📊 Score: {match.get('hybrid_score', match['score']):.2%}"
+                if match.get('keyword_matches'):
+                    result_text += f" (🔤 {match['keyword_matches']} keywords)"
+                result_text += f" | 📅 {meta.get('timestamp', 'N/A')[:10]}\n"
+                if meta.get('topics'):
+                    result_text += f"   🏷️  Topics: {meta.get('topics', 'N/A')}\n"
                 result_text += "\n"
         
         # Step 6: Auto-refine if poor results and enabled

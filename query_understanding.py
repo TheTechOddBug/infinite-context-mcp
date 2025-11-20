@@ -89,6 +89,9 @@ class QueryUnderstandingEngine:
         if cache_key in self.query_cache:
             self.cache_hits += 1
             cached = self.query_cache[cache_key]
+            # Convert cached string query_type back to QueryType enum
+            if isinstance(cached.get("query_type"), str):
+                cached["query_type"] = QueryType(cached["query_type"])
             return QueryClassification(**cached)
         
         self.cache_misses += 1

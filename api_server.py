@@ -61,6 +61,11 @@ class SmartActionRequest(BaseModel):
     request: str
     conversation_context: Optional[str] = None
 
+class AskQuestionRequest(BaseModel):
+    question: str
+    top_k: Optional[int] = 10
+    min_relevance: Optional[float] = 0.3
+
 class AutoCompressRequest(BaseModel):
     conversation: str
     focus: Optional[str] = "general"
@@ -79,6 +84,7 @@ async def root():
             "POST /classify_query": "Classify query intent",
             "POST /rewrite_query": "Generate query rewrites",
             "POST /smart_action": "Intelligent orchestration (recommended)",
+            "POST /ask_question": "RAG Question Answering - Ask questions about your saved data",
             "POST /auto_compress": "Compress conversation",
             "GET /memory_stats": "Get memory statistics",
             "GET /tools": "Get available tools (for ChatGPT function calling)"
@@ -167,6 +173,20 @@ async def smart_action(request: SmartActionRequest):
         result = await mcp.smart_action({
             "request": request.request,
             "conversation_context": request.conversation_context
+        })
+        return {"success": True, "result": result.text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/ask_question")
+async def ask_question(request: AskQuestionRequest):
+    """RAG Question Answering - Ask questions about your saved data"""
+    try:
+        mcp = get_mcp()
+        result = await mcp.ask_question({
+            "question": request.question,
+            "top_k": request.top_k,
+            "min_relevance": request.min_relevance
         })
         return {"success": True, "result": result.text}
     except Exception as e:
