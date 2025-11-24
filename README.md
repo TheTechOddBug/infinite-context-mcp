@@ -1,206 +1,325 @@
-# Infinite Context MCP
+# Unified Context Layer MCP
 
-A unified context layer that makes long AI threads usable across tools. It stores key facts and conversation history in Pinecone, auto-compresses before token limits, and lets Claude retrieve the exact slice you need—decisions, constraints, summaries—without re-explaining threads.
+A  Memory System for AI assistants that goes beyond traditional RAG. Store conversations, build knowledge graphs, extract facts, and maintain user profiles—all searchable with semantic understanding.Use across your apps and LLMs. 
 
-## Features
 
-- **Infinite Context**: Automatically compresses long conversations while preserving important information
-- **Vector Search**: Uses Pinecone for semantic search across conversation history
-- **Full Content Storage**: Stores up to ~5,000 words of raw content per chunk, preserving formatting
-- **Smart Compression**: Uses LLMs to intelligently summarize conversations
-- **High-Quality Embeddings**: Uses OpenAI's text-embedding-3-large model
-- **Query Understanding**: Instacart-inspired query classification, rewrites, and enhanced search
-- **Smart Action**: Natural language orchestration - just describe what you want
+##  Features
 
-## Setup
+### Core Memory
+- **Infinite Context** - Automatically compress long conversations while preserving important information
+- **Vector Search** - Semantic search across all saved conversations using Pinecone
+- **Full Content Storage** - Store up to ~5,000 words per chunk with formatting preserved
+- **Smart Compression** - LLM-powered intelligent summarization
 
-### 1. Install Dependencies
+### Memory System 
+- **User Profiles** - Automatically learns your interests, projects, and preferences
+- **Entity Graphs** - Build knowledge graphs connecting people, projects, concepts
+- **Fact Extraction** - Extract and chain atomic facts from conversations
+- **Temporal Awareness** - Understand recency and relevance over time
+- **Hybrid Scoring** - Combine semantic similarity with temporal and entity signals
+
+### Query Understanding
+- **Query Classification** - Understand intent (search, save, question, etc.)
+- **Query Rewrites** - Generate synonyms, broader terms, and expansions
+- **Enhanced Search** - Guardrails, auto-refinement, and follow-up recommendations
+
+### Indexing
+- **GitHub Repositories** - Index entire repos for code search
+- **Documentation Sites** - Crawl and index docs
+- **Websites** - Full website crawling
+- **Local Filesystems** - Index local directories
+- **Single URLs** - Index individual pages (blogs, ChatGPT conversations, tweets)
+
+---
+
+## 🚀 Quick Start
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/yourusername/infinite-context-mcp.git
+cd infinite-context-mcp
+```
+
+### 2. Create Virtual Environment
+
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+### 3. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Set Up API Keys
-
-Copy the example environment file and fill in your API keys:
+### 4. Configure API Keys
 
 ```bash
 cp env_example.txt .env
 ```
 
-Edit `.env` and add your actual API keys:
+Edit `.env` with your API keys:
 
-```
+```env
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
 PINECONE_API_KEY=your_pinecone_api_key_here
-PINECONE_INDEX_NAME=your_custom_index_name_here  # Optional, defaults to "infinite-context-index"
+PINECONE_INDEX_NAME=infinite-context-index  # Optional, this is the default
 ```
 
-### 3. Get API Keys
+**Get your API keys:**
+- [Anthropic Console](https://console.anthropic.com/) - For Claude (AI responses)
+- [OpenAI Platform](https://platform.openai.com/api-keys) - For embeddings
+- [Pinecone Console](https://app.pinecone.io/) - For vector storage (free tier available)
 
-- **Anthropic**: Get your API key from [Anthropic Console](https://console.anthropic.com/)
-- **OpenAI**: Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
-- **Pinecone**: Get your API key from [Pinecone Console](https://app.pinecone.io/)
+### 5. Update the Run Script
 
-### 4. Add MCP Server to Claude Code
-
-Add the MCP server to Claude Code using the command line:
+Edit `run_mcp.sh` to point to your installation:
 
 ```bash
-claude mcp add --transport stdio infinite-context -- /Users/kayajones/projects/claudecontext/run_mcp.sh
+#!/bin/bash
+cd /path/to/your/infinite-context-mcp
+source venv/bin/activate
+exec python main.py
 ```
 
-**Note**: Update the path to match your project location.
+Make it executable:
 
-### 5. Restart Claude Code
+```bash
+chmod +x run_mcp.sh
+```
 
-Completely quit and restart Claude Code to load the MCP server.
+### 6. Connect to Your AI Tool
 
-## Usage
+#### For Cursor
 
-Once the MCP server is connected, you can use the tools directly in your Claude conversations.
+Add to your Cursor MCP settings (`~/.cursor/mcp.json` or via Settings > MCP):
 
-### Using Smart Action (Recommended)
+```json
+{
+  "mcpServers": {
+    "infinite-context": {
+      "command": "/path/to/your/infinite-context-mcp/run_mcp.sh",
+      "args": [],
+      "env": {
+        "PYTHONPATH": "/path/to/your/infinite-context-mcp"
+      }
+    }
+  }
+}
+```
 
-The easiest way to use the MCP - just describe what you want in natural language:
+#### For Claude Desktop
+
+Add the same configuration to Claude Desktop's MCP settings.
+
+#### For Claude Code (CLI)
+
+```bash
+claude mcp add --transport stdio infinite-context -- /path/to/your/infinite-context-mcp/run_mcp.sh
+```
+
+### 7. Restart Your AI Tool
+
+Fully quit and restart Cursor/Claude Desktop to load the MCP server.
+
+---
+
+## 📖 Usage
+
+### Smart Action (Recommended)
+
+The easiest way to use the MCP—just describe what you want:
 
 ```
-You: "Use smart_action to save this conversation about setting up the MCP server"
-
-Claude: [Automatically calls smart_action tool]
-        ✅ Context saved with topics: MCP, Setup, Configuration
+"Save this conversation about setting up the MCP server"
+"Find past discussions about API integration"
+"What have I been working on lately?"
+"Show me my user profile"
 ```
 
 ### Quick Reference
 
-| What You Want | How to Ask Claude |
-|--------------|-------------------|
-| Save context | `"Use smart_action to save this conversation about X"` |
-| Find context | `"Use smart_action to find past discussions about Y"` |
-| Get stats | `"Use get_memory_stats to show memory statistics"` |
-| Search | `"Use enhanced_search with query: 'your search term'"` |
+| What You Want | Example Request |
+|---------------|-----------------|
+| Save context | `"Save this conversation about X"` |
+| Search context | `"Find information about Y"` |
+| Ask a question | `"What do I know about Z?"` |
+| Get profile | `"Show my user profile"` |
+| Memory stats | `"Show memory statistics"` |
+| Index a repo | `"Index https://github.com/owner/repo"` |
 
-### Available MCP Tools
+---
 
-#### Core Tools
+## 🛠️ Available Tools
 
-- **`smart_action`** ⭐ - Intelligent orchestration tool. Just describe what you want in natural language.
-- **`save_context`** - Save conversation context to Pinecone (includes full content up to ~5,000 words)
-- **`search_context`** - Basic semantic search across saved conversations
-- **`enhanced_search`** - Advanced search with query understanding, rewrites, and guardrails
-- **`get_memory_stats`** - View memory statistics and cache performance
+### Core Tools
 
-#### Query Understanding Tools
+| Tool | Description |
+|------|-------------|
+| `smart_action` ⭐ | Intelligent orchestration—just describe what you want |
+| `save_context` | Save conversation context with summary, topics, and full content |
+| `search_context` | Semantic search across saved conversations |
+| `enhanced_search` | Advanced search with query understanding and auto-refinement |
+| `ask_question` | RAG Q&A—ask questions about your saved data |
+| `auto_compress` | Compress and save long conversations |
+| `get_memory_stats` | View memory statistics |
 
-- **`classify_query`** - Classify queries to understand intent and categories
-- **`rewrite_query`** - Generate query rewrites (synonyms, broader terms, expansions)
+### Memory System Tools
 
-#### Advanced Tools
+| Tool | Description |
+|------|-------------|
+| `get_user_profile` | View your learned profile (interests, focus, stats) |
+| `update_user_profile` | Manually update profile preferences and focus |
+| `query_knowledge_graph` | Find entity relationships and connections |
+| `get_graph_summary` | Overview of your knowledge graph |
+| `query_facts` | Search extracted facts by entity or type |
+| `get_fact_summary` | Summary of all extracted facts |
 
-- **`auto_compress`** - Automatically compress and save long conversations
+### Query Understanding Tools
 
-### Example Usage in Claude
+| Tool | Description |
+|------|-------------|
+| `classify_query` | Classify query intent and categories |
+| `rewrite_query` | Generate query variations for better recall |
 
-**Save Context:**
+### Indexing Tools
+
+| Tool | Description |
+|------|-------------|
+| `index_repository` | Index a GitHub repository |
+| `index_documentation` | Index a documentation site |
+| `index_website` | Crawl and index a full website |
+| `index_local_filesystem` | Index a local directory |
+| `index_url` | Index a single URL (any type) |
+| `check_indexing_status` | Check status of indexing job |
+| `list_indexed_sources` | List all indexed sources |
+| `delete_indexed_source` | Remove an indexed source |
+
+---
+
+## 🧠 How the Memory System Works
+
+### 1. Context Storage
+
+When you save context, the system stores:
+- **Summary** - Brief overview (up to 2,000 chars)
+- **Full Content** - Raw content preserving formatting (up to 25,000 chars)
+- **Topics** - Tags for categorization
+- **Key Findings** - Important points extracted
+- **Entities** - People, projects, concepts mentioned
+- **Facts** - Atomic facts for precise retrieval
+
+### 2. User Profile Learning
+
+The system automatically learns:
+- **Interests** - Topics you frequently discuss
+- **Current Focus** - What you're actively working on
+- **Entity Connections** - How concepts in your work relate
+
+### 3. Knowledge Graph
+
+As you save contexts, entities are extracted and connected:
+- Find relationships between projects, people, and concepts
+- Discover paths between entities
+- Get summaries of your knowledge domain
+
+### 4. Fact Extraction
+
+Atomic facts are extracted with:
+- **Type** - Statement, decision, preference, problem, solution, etc.
+- **Confidence** - How certain the extraction is
+- **Temporal Ordering** - Newer facts can supersede older ones
+
+### 5. Hybrid Search
+
+Search combines multiple signals:
+- **Semantic Similarity** - Meaning-based matching
+- **Temporal Relevance** - Recent content weighted higher
+- **Entity Matching** - Boost results with matching entities
+- **Profile Context** - Personalized based on your interests
+
+---
+
+## 📁 Project Structure
+
 ```
-You: "Use smart_action to save this conversation about ERP integration requirements"
-
-Claude: [Calls smart_action automatically]
-        ✅ Saved context chunk 20250101_120000_chunk_0
-        Topics: ERP, Integration, Requirements
+infinite-context-mcp/
+├── main.py                 # MCP server with all tools
+├── run_mcp.sh              # Startup script
+├── requirements.txt        # Python dependencies
+├── env_example.txt         # Environment variable template
+├── query_understanding.py  # Query classification & rewriting
+├── user_profile.py         # User profile management
+├── entity_graph.py         # Knowledge graph implementation
+├── fact_chain.py           # Fact extraction & chaining
+├── memory_scorer.py        # Hybrid scoring system
+├── lib/
+│   └── indexing_service.py # External indexing service
+└── api/
+    └── api_server.py       # Optional REST API
 ```
 
-**Search Context:**
-```
-You: "Use enhanced_search to find information about WMS sync requirements"
+---
 
-Claude: [Calls enhanced_search automatically]
-        🚀 Enhanced Search Results:
-        📄 Result 1 (relevance: 85%)
-           📝 Summary: Case Study: ERP -> WMS Integration...
-           📜 Content Preview: [Full formatted content shown]
-```
-
-**Get Statistics:**
-```
-You: "Use get_memory_stats to show me memory usage"
-
-Claude: [Calls get_memory_stats automatically]
-        📊 Memory Statistics:
-        Total vectors stored: 42
-        Current session: 20250101_120000
-        ...
-```
-
-## How It Works
-
-1. **Context Storage**: When you save context, the system stores:
-   - Summary and topics (for quick reference)
-   - Full raw content (up to ~5,000 words, preserving formatting)
-   - Key findings and structured data
-   - All stored as vectors in Pinecone for semantic search
-
-2. **Semantic Search**: Uses OpenAI embeddings to find relevant context even with different wording or formats
-
-3. **Query Understanding**: Automatically classifies queries, generates rewrites, and applies guardrails for better results
-
-4. **Smart Action**: Intelligently routes your natural language requests to the right tools
-
-## Storage Format
-
-Each saved context chunk includes:
-
-- **Vector Embedding**: 1024-dimensional embedding for semantic search
-- **Metadata**:
-  - `summary`: Brief summary (up to 2,000 chars)
-  - `content`: Full raw content (up to 25,000 chars) - preserves all formatting
-  - `topics`: List of topics/tags
-  - `findings`: Key findings or important points
-  - `data`: Structured data (JSON, up to 2,000 chars)
-  - `timestamp`: ISO format timestamp
-  - `session_id`: Session identifier
-
-## Troubleshooting
+## 🔧 Troubleshooting
 
 ### MCP Server Not Appearing
 
-- **Check the script path**: Make sure the path in the `claude mcp add` command is correct
-- **Check Python environment**: Ensure the virtual environment has all dependencies installed
-- **Check .env file**: Verify all API keys are set correctly
-- **Restart Claude Code**: Fully quit and restart (not just reload)
+1. **Check the script path** - Verify `run_mcp.sh` path in your MCP config
+2. **Test the script** - Run `./run_mcp.sh` directly to see errors
+3. **Check Python environment** - Ensure venv has all dependencies
+4. **Restart completely** - Fully quit and restart your AI tool
 
-### Tools Not Available
+### API Errors
 
-- **Restart Claude Code**: Fully quit and restart after adding the MCP server
-- **Check MCP connection**: Verify the server is listed as connected in Claude Code settings
-- **Test script manually**: Run `./run_mcp.sh` directly to ensure it works
+1. **Verify API keys** - Check all keys in `.env` are valid
+2. **Pinecone index** - Will be auto-created on first run
+3. **OpenAI access** - Ensure your key has embedding API access
 
 ### Permission Errors
 
 ```bash
-chmod +x /Users/kayajones/projects/claudecontext/run_mcp.sh
+chmod +x run_mcp.sh
 ```
 
-### API Errors
+### Tools Not Working
 
-- **Verify API keys**: Check that all three API keys in `.env` are valid
-- **Check Pinecone index**: The system will automatically create the Pinecone index on first run
-- **Ensure OpenAI API key has embedding access**: Required for generating embeddings
+1. Check MCP connection status in your AI tool's settings
+2. Look for error messages in the terminal running the MCP
+3. Verify the Pinecone index exists and is accessible
 
-## Security
+---
 
-**Important Security Notes:**
+## 🔐 Security
 
-- Never commit your `.env` file to version control
-- The `.gitignore` file is configured to exclude sensitive files
-- All API keys are loaded from environment variables
-- The Pinecone index name is configurable via environment variable
-- Use unique index names for different projects to avoid data conflicts
+- **Never commit `.env`** - It's in `.gitignore` by default
+- **API keys in environment** - All secrets loaded from env vars
+- **Unique index names** - Use different `PINECONE_INDEX_NAME` for different projects
+- **Local storage** - User profiles stored locally in `~/.infinite-context/`
 
-## Additional Documentation
+---
 
-- [QUICKSTART.md](QUICKSTART.md) - Quick start guide for running the MCP server
-- [SMART_ACTION.md](SMART_ACTION.md) - Detailed guide to smart_action orchestration
-- [QUERY_UNDERSTANDING.md](QUERY_UNDERSTANDING.md) - Guide to Query Understanding features
-- [USAGE.md](USAGE.md) - How to capture and use context effectively
+## 📚 Additional Documentation
+
+- [QUICKSTART.md](QUICKSTART.md) - Quick setup guide
+- [SMART_ACTION.md](SMART_ACTION.md) - Smart action orchestration details
+- [QUERY_UNDERSTANDING.md](QUERY_UNDERSTANDING.md) - Query understanding features
+- [USAGE.md](USAGE.md) - Detailed usage guide
+
+---
+
+## 🤝 Contributing
+
+Contributions welcome!
+
+---
+
+## 📄 License
+
+MIT License 
+
+## Contact 
+Reach out to me on x!

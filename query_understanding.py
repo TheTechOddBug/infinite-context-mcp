@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 Query Understanding Module - Inspired by Instacart's Intent Engine
-Implements query classification, rewrites, and RAG-enhanced context retrieval
+Implements query classification, rewrites, temporal awareness, and RAG-enhanced context retrieval
 """
 import os
 import json
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
+import re
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass, field
 from enum import Enum
 
 import openai
@@ -22,7 +24,16 @@ class QueryType(Enum):
     COMMAND = "command"
     CONTEXT_RETRIEVAL = "context_retrieval"
     DATA_STORAGE = "data_storage"
+    TEMPORAL = "temporal"  # New: time-based queries
     UNKNOWN = "unknown"
+
+
+class TemporalScope(Enum):
+    """Temporal scope for queries"""
+    CURRENT = "current"  # Present state only
+    HISTORICAL = "historical"  # Past states
+    ALL_TIME = "all_time"  # No temporal filter
+    SPECIFIC_RANGE = "specific_range"  # Specific date range
 
 
 class RewriteType(Enum):
@@ -34,12 +45,24 @@ class RewriteType(Enum):
 
 
 @dataclass
+class TemporalInfo:
+    """Temporal information extracted from a query"""
+    scope: TemporalScope
+    reference_date: Optional[datetime] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    is_present_tense: bool = True
+    temporal_keywords: List[str] = field(default_factory=list)
+
+
+@dataclass
 class QueryClassification:
-    """Result of query classification"""
+    """Result of query classification with temporal awareness"""
     query_type: QueryType
     confidence: float
     categories: List[str]
     intent: str
+    temporal_info: Optional[TemporalInfo] = None  # New: temporal context
 
 
 @dataclass
@@ -54,8 +77,37 @@ class QueryRewrite:
 class QueryUnderstandingEngine:
     """
     Query Understanding Engine inspired by Instacart's approach.
-    Implements context-engineering, guardrails, and query understanding.
+    Implements context-engineering, guardrails, temporal awareness, and query understanding.
     """
+    
+    # Temporal keyword patterns for detection
+    PAST_KEYWORDS = [
+        "was", "were", "had", "did", "used to", "previously", "before",
+        "earlier", "last", "ago", "past", "former", "old", "historical",
+        "back then", "at that time", "originally", "initially"
+    ]
+    
+    PRESENT_KEYWORDS = [
+        "is", "are", "has", "have", "do", "does", "currently", "now",
+        "today", "present", "current", "active", "existing", "ongoing"
+    ]
+    
+    FUTURE_KEYWORDS = [
+        "will", "going to", "plan to", "intend to", "upcoming", "next",
+        "future", "soon", "later", "tomorrow"
+    ]
+    
+    RELATIVE_TIME_PATTERNS = {
+        r"last\s+(\d+)\s+days?": lambda m: timedelta(days=int(m.group(1))),
+        r"last\s+(\d+)\s+weeks?": lambda m: timedelta(weeks=int(m.group(1))),
+        r"last\s+(\d+)\s+months?": lambda m: timedelta(days=int(m.group(1)) * 30),
+        r"last\s+week": lambda m: timedelta(weeks=1),
+        r"last\s+month": lambda m: timedelta(days=30),
+        r"yesterday": lambda m: timedelta(days=1),
+        r"today": lambda m: timedelta(days=0),
+        r"this\s+week": lambda m: timedelta(days=7),
+        r"this\s+month": lambda m: timedelta(days=30),
+    }
     
     def __init__(self, openai_client: Optional[openai.OpenAI] = None):
         self.openai = openai_client or openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -70,7 +122,8 @@ class QueryUnderstandingEngine:
                 "search": ["find", "search", "look for", "retrieve", "get"],
                 "question": ["what", "how", "why", "when", "where", "explain"],
                 "command": ["save", "store", "create", "delete", "update"],
-                "context_retrieval": ["previous", "past", "earlier", "history", "remember"]
+                "context_retrieval": ["previous", "past", "earlier", "history", "remember"],
+                "temporal": ["when", "since", "until", "before", "after", "during"]
             }
         }
         
@@ -79,11 +132,183 @@ class QueryUnderstandingEngine:
         self.cache_hits = 0
         self.cache_misses = 0
     
+    def detect_temporal_info(self, query: str) -> TemporalInfo:
+        """
+        Detect temporal information from a query.
+        This enables time-aware fact retrieval.
+        """
+        query_lower = query.lower()
+        now = datetime.now()
+        
+        # Detect temporal keywords
+        found_past = [kw for kw in self.PAST_KEYWORDS if kw in query_lower]
+        found_present = [kw for kw in self.PRESENT_KEYWORDS if kw in query_lower]
+        found_future = [kw for kw in self.FUTURE_KEYWORDS if kw in query_lower]
+        
+        all_temporal_keywords = found_past + found_present + found_future
+        
+        # Determine scope
+        scope = TemporalScope.ALL_TIME
+        is_present_tense = True
+        start_date = None
+        end_date = None
+        reference_date = now
+        
+        # Check for relative time patterns
+        for pattern, delta_func in self.RELATIVE_TIME_PATTERNS.items():
+            match = re.search(pattern, query_lower)
+            if match:
+                delta = delta_func(match)
+                start_date = now - delta
+                end_date = now
+                scope = TemporalScope.SPECIFIC_RANGE
+                all_temporal_keywords.append(match.group(0))
+                break
+        
+        # If no specific range found, infer from keywords
+        if scope == TemporalScope.ALL_TIME:
+            if found_past and not found_present:
+                scope = TemporalScope.HISTORICAL
+                is_present_tense = False
+            elif found_present and not found_past:
+                scope = TemporalScope.CURRENT
+                is_present_tense = True
+        
+        return TemporalInfo(
+            scope=scope,
+            reference_date=reference_date,
+            start_date=start_date,
+            end_date=end_date,
+            is_present_tense=is_present_tense,
+            temporal_keywords=all_temporal_keywords
+        )
+    
+    def apply_temporal_filter(
+        self, 
+        results: List[Dict], 
+        temporal_info: TemporalInfo
+    ) -> List[Dict]:
+        """
+        Filter results based on temporal validity.
+        This handles facts with validity windows.
+        """
+        if temporal_info.scope == TemporalScope.ALL_TIME:
+            return results
+        
+        now = datetime.now()
+        filtered = []
+        
+        for result in results:
+            meta = result.get('metadata', {})
+            
+            # Get temporal validity from metadata
+            valid_from_str = meta.get('valid_from', '')
+            valid_until_str = meta.get('valid_until', '')
+            
+            # Parse dates
+            valid_from = None
+            valid_until = None
+            
+            if valid_from_str:
+                try:
+                    valid_from = datetime.fromisoformat(valid_from_str.replace('Z', '+00:00'))
+                except:
+                    pass
+            
+            if valid_until_str:
+                try:
+                    valid_until = datetime.fromisoformat(valid_until_str.replace('Z', '+00:00'))
+                except:
+                    pass
+            
+            # Apply temporal filtering based on scope
+            include = True
+            
+            if temporal_info.scope == TemporalScope.CURRENT:
+                # Only include facts that are currently valid
+                if valid_until and valid_until < now:
+                    include = False  # Fact has expired
+                if valid_from and valid_from > now:
+                    include = False  # Fact not yet valid
+                    
+            elif temporal_info.scope == TemporalScope.HISTORICAL:
+                # Include facts that were valid in the past
+                # This is more permissive - we want to see past states
+                pass
+                
+            elif temporal_info.scope == TemporalScope.SPECIFIC_RANGE:
+                # Check if fact was valid during the specified range
+                if temporal_info.start_date and temporal_info.end_date:
+                    # Fact should overlap with query range
+                    if valid_until and valid_until < temporal_info.start_date:
+                        include = False  # Fact expired before range
+                    if valid_from and valid_from > temporal_info.end_date:
+                        include = False  # Fact not valid until after range
+            
+            if include:
+                # Add temporal relevance score
+                result['temporal_relevance'] = self._calculate_temporal_relevance(
+                    meta, temporal_info, now
+                )
+                filtered.append(result)
+        
+        return filtered
+    
+    def _calculate_temporal_relevance(
+        self, 
+        metadata: Dict, 
+        temporal_info: TemporalInfo,
+        now: datetime
+    ) -> float:
+        """Calculate temporal relevance score for a result"""
+        relevance = 1.0
+        
+        # Get timestamp
+        timestamp_str = metadata.get('timestamp', '')
+        if not timestamp_str:
+            return 0.5  # Neutral if no timestamp
+        
+        try:
+            timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        except:
+            return 0.5
+        
+        # Calculate recency bonus/penalty
+        days_old = (now - timestamp).days
+        
+        if temporal_info.scope == TemporalScope.CURRENT:
+            # Prefer recent facts for current queries
+            if days_old <= 7:
+                relevance = 1.0
+            elif days_old <= 30:
+                relevance = 0.8
+            elif days_old <= 90:
+                relevance = 0.6
+            else:
+                relevance = 0.4
+                
+        elif temporal_info.scope == TemporalScope.HISTORICAL:
+            # For historical queries, older might be more relevant
+            relevance = 0.8  # Slight penalty, but not much
+            
+        elif temporal_info.scope == TemporalScope.SPECIFIC_RANGE:
+            # Check if timestamp is within range
+            if temporal_info.start_date and temporal_info.end_date:
+                if temporal_info.start_date <= timestamp <= temporal_info.end_date:
+                    relevance = 1.0
+                else:
+                    relevance = 0.5
+        
+        return relevance
+    
     def classify_query(self, query: str, context: Optional[Dict] = None) -> QueryClassification:
         """
         Classify a query into categories and determine intent.
-        Uses RAG to inject domain context.
+        Uses RAG to inject domain context. Now includes temporal awareness.
         """
+        # Detect temporal information first (fast, no API call)
+        temporal_info = self.detect_temporal_info(query)
+        
         # Check cache first (hybrid approach)
         cache_key = f"classify:{query.lower().strip()}"
         if cache_key in self.query_cache:
@@ -92,6 +317,8 @@ class QueryUnderstandingEngine:
             # Convert cached string query_type back to QueryType enum
             if isinstance(cached.get("query_type"), str):
                 cached["query_type"] = QueryType(cached["query_type"])
+            # Add temporal info (not cached as it depends on current time)
+            cached["temporal_info"] = temporal_info
             return QueryClassification(**cached)
         
         self.cache_misses += 1
@@ -133,14 +360,22 @@ Respond in JSON format:
             
             result = json.loads(response.choices[0].message.content)
             
+            # Determine if this is a temporal query based on keywords
+            query_type = result.get("query_type", "unknown")
+            if temporal_info.temporal_keywords and query_type not in ["temporal"]:
+                # Override to temporal if strong temporal signals
+                if len(temporal_info.temporal_keywords) >= 2 or temporal_info.scope != TemporalScope.ALL_TIME:
+                    query_type = "temporal"
+            
             classification = QueryClassification(
-                query_type=QueryType(result.get("query_type", "unknown")),
+                query_type=QueryType(query_type),
                 confidence=float(result.get("confidence", 0.5)),
                 categories=result.get("categories", []),
-                intent=result.get("intent", "")
+                intent=result.get("intent", ""),
+                temporal_info=temporal_info
             )
             
-            # Cache the result
+            # Cache the result (without temporal_info as it's time-dependent)
             self.query_cache[cache_key] = {
                 "query_type": classification.query_type.value,
                 "confidence": classification.confidence,
@@ -156,7 +391,8 @@ Respond in JSON format:
                 query_type=QueryType.UNKNOWN,
                 confidence=0.3,
                 categories=[],
-                intent=f"Error classifying query: {str(e)}"
+                intent=f"Error classifying query: {str(e)}",
+                temporal_info=temporal_info
             )
     
     def generate_rewrites(

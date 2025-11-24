@@ -15,7 +15,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
@@ -39,14 +38,10 @@ venv.bak/
 *.swp
 *.swo
 *~
+*.code-workspace
 
 # OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
 # Logs
@@ -59,36 +54,47 @@ logs/
 temp/
 tmp/
 
-# API Keys and secrets (extra protection)
-*secret*
-*key*
-*password*
-*credential*
-
 # Database files
 *.db
 *.sqlite
 *.sqlite3
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pytest
+# Testing
 .pytest_cache/
 .coverage
 htmlcov/
 
-# mypy
+# Type checking
 .mypy_cache/
-.dmypy.json
-dmypy.json
 
-# History files (VS Code Local History extension)
-.history/
+# Jupyter
+.ipynb_checkpoints/
 
-# Workspace files (user-specific IDE configs)
-*.code-workspace
+# Node (if any)
+node_modules/
+package-lock.json
 
-# Config files that might contain secrets (keep example files)
+# Project-specific
+api/
 mcp_config.json
-!mcp_config_alternative.json
+mcp_config_alternative.json
+
+# Scripts with personal paths
+run_mcp.sh
+start_api.sh
+demo_setup.sh
+
+# Debug/dev files
+debug_save.py
+capture_context.py
+
+# Personal notes
+DEMO_WALKTHROUGH.md
+CHATGPT_INTEGRATION.md
+INTEGRATION_SUMMARY.md
+QUICK_TEST_EXAMPLES.md
+
+# Test files
+test_*.py
+
+raycastcontext.code-workspace

@@ -15,5 +15,5 @@ echo ""
 echo "💡 Press Ctrl+C to stop the server"
 echo ""
 
-python api_server.py
+python api/api_server.py
 

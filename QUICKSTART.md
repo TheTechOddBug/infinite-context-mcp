@@ -1,111 +1,133 @@
-# Quick Start Guide - Running the MCP Server Locally
+# Quick Start Guide
 
-## Prerequisites Check
+Get the Infinite Context MCP running in 5 minutes.
 
-✅ Virtual environment exists  
-✅ Dependencies installed  
-✅ .env file configured  
+## Prerequisites
 
-## Method 1: Test Run (Direct Execution)
+- Python 3.8+
+- API keys for Anthropic, OpenAI, and Pinecone
 
-Test the server directly to make sure it works:
+## Setup
+
+### 1. Clone & Install
 
 ```bash
-cd /Users/kayajones/projects/claudecontext
-source venv/bin/activate
-python main.py
+git clone https://github.com/yourusername/infinite-context-mcp.git
+cd infinite-context-mcp
+
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+pip install -r requirements.txt
 ```
 
-The server will start and wait for MCP client connections via stdio. Press `Ctrl+C` to stop.
-
-## Method 2: Using the Run Script
+### 2. Configure API Keys
 
 ```bash
-cd /Users/kayajones/projects/claudecontext
+cp env_example.txt .env
+```
+
+Edit `.env`:
+
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+PINECONE_API_KEY=...
+```
+
+### 3. Update Run Script
+
+Edit `run_mcp.sh` with your actual path:
+
+```bash
+#!/bin/bash
+cd /path/to/your/infinite-context-mcp
+source venv/bin/activate
+exec python main.py
+```
+
+Make executable:
+
+```bash
+chmod +x run_mcp.sh
+```
+
+### 4. Test It Works
+
+```bash
 ./run_mcp.sh
 ```
 
-## Method 3: Connect to Cursor/Claude Desktop
+The server will start and wait for MCP client connections. Press `Ctrl+C` to stop.
 
-### For Cursor:
+## Connect to Your AI Tool
 
-1. Open Cursor Settings
-2. Go to MCP Settings (or search for "MCP")
-3. Add your MCP server configuration:
+### Cursor
+
+Add to `~/.cursor/mcp.json` (or Settings > MCP):
 
 ```json
 {
   "mcpServers": {
     "infinite-context": {
-      "command": "/Users/kayajones/projects/claudecontext/run_mcp.sh",
+      "command": "/path/to/your/infinite-context-mcp/run_mcp.sh",
       "args": [],
       "env": {
-        "PYTHONPATH": "/Users/kayajones/projects/claudecontext"
+        "PYTHONPATH": "/path/to/your/infinite-context-mcp"
       }
     }
   }
 }
 ```
 
-4. Restart Cursor
-5. The MCP tools will be available in your conversations
+Restart Cursor completely.
 
-### For Claude Desktop:
+### Claude Desktop
 
-1. Open Claude Desktop Settings
-2. Navigate to MCP Servers
-3. Add the same configuration as above
-4. Restart Claude Desktop
+Same configuration in Claude Desktop's MCP settings.
 
-## Verifying It Works
+### Claude Code (CLI)
 
-Once connected, you can test the tools:
+```bash
+claude mcp add --transport stdio infinite-context -- /path/to/your/infinite-context-mcp/run_mcp.sh
+```
+
+## Verify It Works
+
+Once connected, try these in your AI conversation:
 
 1. **Check memory stats:**
    ```
-   Use the get_memory_stats tool
+   Show me memory statistics
    ```
 
 2. **Save context:**
    ```
-   Use save_context with summary: "Test context", topics: ["test"]
+   Save this conversation about getting started with the MCP
    ```
 
 3. **Search context:**
    ```
-   Use search_context with query: "test"
+   Find information about MCP setup
+   ```
+
+4. **View your profile:**
+   ```
+   Show my user profile
    ```
 
 ## Troubleshooting
 
-### Server won't start
-- Check that `.env` file has all required API keys
-- Verify virtual environment is activated
-- Check Python version: `python --version` (should be 3.8+)
-
-### Tools not appearing
-- Restart Cursor/Claude Desktop after configuration
-- Check MCP server logs for errors
-- Verify the path in `mcp_config.json` is correct
-
-### API Errors
-- Verify API keys in `.env` are valid
-- Check Pinecone index exists (will be created automatically)
-- Ensure OpenAI API key has embedding access
+| Problem | Solution |
+|---------|----------|
+| Server won't start | Check `.env` has all API keys |
+| Tools not appearing | Restart Cursor/Claude completely |
+| API errors | Verify API keys are valid |
+| Permission denied | Run `chmod +x run_mcp.sh` |
 
 ## Next Steps
 
-- Read `USAGE.md` for detailed context capture instructions
-- Try the `capture_context.py` script for manual context saving
-- Start saving important conversation context!
-
-
-
-
-
-
-
-
-
-
-
+- Read the full [README.md](README.md) for all features
+- Try the Memory System tools (profiles, knowledge graph, facts)
+- Index a GitHub repo or documentation site
+- See [USAGE.md](USAGE.md) for detailed examples
